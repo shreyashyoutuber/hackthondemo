@@ -381,6 +381,13 @@ const transporter = nodemailer.createTransport({
     }
 });
 
+// Verify transporter at startup to surface configuration/auth problems early
+transporter.verify().then(() => {
+	console.log('Email transporter verified and ready to send messages.');
+}).catch(err => {
+	console.error('Email transporter verification failed. Verify `MAIL_PASSWORD` (use a Gmail App Password if using Google accounts), and ensure SMTP access is allowed.');
+	console.error('Transporter verify error:', err && err.message ? err.message : err);
+});
 // 5. Add the "middleware"
 app.use(cors());
 app.use(express.json());
@@ -676,8 +683,12 @@ app.post('/api/send-verification', async (req, res) => {
 			await transporter.sendMail(mailOptions);
 			res.json({ success: true, message: 'Verification email sent.' });
 		} catch (error) {
-			console.error("Error sending email:", error); // Log the actual error
-			res.json({ success: false, message: 'Error sending verification email.' });
+			console.error("Error sending email:", error);
+			// In development, expose the error message to help debugging. In production, avoid leaking internals.
+			if (process.env.NODE_ENV !== 'production') {
+				return res.json({ success: false, message: 'Error sending verification email.', error: error && error.message ? error.message : String(error) });
+			}
+			res.json({ success: false, message: 'Error sending verification email. Check server logs for details.' });
 		}
     }
 });
