@@ -279,6 +279,7 @@ require('dotenv').config({ path: __dirname + '/.env' });
 const express = require('express');
 const cors = require('cors');
 const nodemailer = require('nodemailer');
+const sendgridMail = require('@sendgrid/mail');
 const fs = require('fs');
 const path = require('path'); 
 
@@ -388,6 +389,30 @@ transporter.verify().then(() => {
 	console.error('Email transporter verification failed. Verify `MAIL_PASSWORD` (use a Gmail App Password if using Google accounts), and ensure SMTP access is allowed.');
 	console.error('Transporter verify error:', err && err.message ? err.message : err);
 });
+
+// Optional SendGrid fallback: If `MAIL_PROVIDER=sendgrid` or `SENDGRID_API_KEY` is provided
+const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || null;
+const MAIL_PROVIDER = (process.env.MAIL_PROVIDER || (SENDGRID_API_KEY ? 'sendgrid' : 'smtp')).toString().toLowerCase();
+if (MAIL_PROVIDER === 'sendgrid' && SENDGRID_API_KEY) {
+	sendgridMail.setApiKey(SENDGRID_API_KEY);
+	console.log('SendGrid initialized as mail provider.');
+}
+
+// Unified sendEmail helper: uses SendGrid when configured, otherwise Nodemailer transporter
+async function sendEmail(mailOptions) {
+	if (MAIL_PROVIDER === 'sendgrid' && SENDGRID_API_KEY) {
+		const msg = {
+			to: mailOptions.to,
+			from: mailOptions.from || ADMIN_EMAIL,
+			subject: mailOptions.subject,
+			html: mailOptions.html,
+			text: mailOptions.text || undefined
+		};
+		// sendgridMail.send returns an array of responses in some versions
+		return await sendgridMail.send(msg);
+	}
+	return await transporter.sendMail(mailOptions);
+}
 // 5. Add the "middleware"
 app.use(cors());
 app.use(express.json());
@@ -680,7 +705,7 @@ app.post('/api/send-verification', async (req, res) => {
             html: `Hi ${fullName},<br><br>Your verification code is: <h2>${verificationCode}</h2>`
         };
 		try {
-			await transporter.sendMail(mailOptions);
+			await sendEmail(mailOptions);
 			res.json({ success: true, message: 'Verification email sent.' });
 		} catch (error) {
 			console.error("Error sending email:", error);
@@ -761,8 +786,8 @@ app.post('/api/create-user', async (req, res) => {
         };
 
         try {
-            await transporter.sendMail(adminMailOptions);
-            console.log('Admin notified about teacher approval request.');
+			await sendEmail(adminMailOptions);
+			console.log('Admin notified about teacher approval request.');
         } catch (error) {
             console.error('Failed to send admin notification:', error);
         }
@@ -785,13 +810,13 @@ app.get('/api/approve-teacher', async (req, res) => {
 		console.log("WARNING: Data updated in memory, but not saved to file (read-only file system).");
 
 		try {
-			await transporter.sendMail({
-				from: ADMIN_EMAIL,
-				to: emailToApprove,
-				subject: 'Your EDUWISE Teacher Account is Approved!',
-				html: `<h3>Welcome aboard!</h3>
-					   <p>Your account has been approved. You can now <a href="${WEBSITE_URL}/login.html">log in here</a>.</p>`
-			});
+				await sendEmail({
+					from: ADMIN_EMAIL,
+					to: emailToApprove,
+					subject: 'Your EDUWISE Teacher Account is Approved!',
+					html: `<h3>Welcome aboard!</h3>
+					       <p>Your account has been approved. You can now <a href="${WEBSITE_URL}/login.html">log in here</a>.</p>`
+				});
 		} catch (e) {
 			console.error("Could not send approval notification email:", e);
 		}
